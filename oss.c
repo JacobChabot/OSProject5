@@ -10,7 +10,7 @@
 #include <sys/ipc.h>
 #include <stdbool.h>
 
-int n = 18; // number of processes
+int n = 5; // number of processes
 
 void signalHandler(int signal) {
 	
@@ -31,13 +31,17 @@ struct descriptor { // some resources may be shareable
 };
 
 void forkChild(int processCounter) { // function to fork and execute child process
+	// convert variables to chars to pass to child processes
+	char temp[10];
+	snprintf(temp, sizeof(temp), "%d", processCounter);
+	
 	pid_t pid;
 	pid = fork();
 
 	if (pid == 0) {
                 //child
-                printf("execute child\n");
-                if (execl("./user_proc.out", "./user_proc.out", NULL) == -1) {
+                printf("\nexecute child\n");
+                if (execl("./user_proc.out", "./user_proc.out", temp, NULL) == -1) {
                         perror("execl");
                         exit(1);
                 }
@@ -51,9 +55,8 @@ long long timeDiff(struct timeval start, struct timeval end) {
 }
 
 
-int main() {
+int main(int argc, char* argv[]) {
 	printf("Main\n");
-
 
 	// generate key and allocate shared memory for clock
 	struct timer * clock;
@@ -102,10 +105,11 @@ int main() {
 	// loop through resource descriptor assigning values
 	int i;
 	for (i = 1; i <= 20; i++) {
-		rd[i].inventory == 20; // set total number of resources to 20
+		rd[i].id = i;
+		rd[i].allocation = -1;
+		rd[i].inventory = 20; // set total number of resources to 20
 	}
 	
-	sleep(5);
 	struct timeval start_time, current_time;
 	srand(time(NULL));
 	int random = (rand() % 500) + 1; // generate random number between 1 and 500 milliseconds
@@ -120,13 +124,13 @@ int main() {
 		
 		gettimeofday(&current_time, NULL);
 		
-		// randomly if random is equal to what timeDiff returns
-		if (random == timeDiff(start_time, current_time)) {
+		// randomly fork if random is equal to the current ms time and n number of processes have not been executed
+		if (random == timeDiff(start_time, current_time) && processCounter != n) {
 			forkChild(processCounter);
-			sleep(3); // allow time for child to execute
+			sleep(1); // allow time for child to execute
 			int random = (rand() % 500) + 1; // generate new number
 			processCounter = processCounter + 1; // increment process counter
-                	
+                	/*
 			// pause child
                 	printf("Pausing child %d for 5 seconds\n", pid[0]);
                 	if (kill(pid[0], SIGSTOP) == -1) {
@@ -139,11 +143,11 @@ int main() {
                         	perror("SIGCONT");
                         	exit(EXIT_FAILURE);
                 	}
-
+			*/
 			gettimeofday(&start_time, NULL); // reset milliseconds timer
 		}	
         
-	} while (processCounter == 0);
+	} while (processCounter < 6);
 
 	wait(0); // wait for child
 
