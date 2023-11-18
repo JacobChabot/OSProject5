@@ -10,10 +10,15 @@
 #include <sys/ipc.h>
 #include <stdbool.h>
 
-int n = 5; // number of processes
 
-void signalHandler(int signal) {
-	
+#define MAX_PROC 5
+pid_t pidArray[MAX_PROC];
+volatile bool signalReceived = false;
+
+// signal handler for CTRL C
+void intHandler(int signal) {
+	printf("Terminating children, freeing memory and exiting....\n");
+	signalReceived = true;
 }
 
 struct timer {
@@ -24,11 +29,13 @@ struct timer {
 struct descriptor { // some resources may be shareable
 	int id; // resource id
 	int inventory; // total number of resources
-	int request; 
+	int instances; // number of instances for one resource
+	int request[MAX_PROC]; 
 	int allocation;
 	int release;
-	int queue; // processes waiting on the resource
 };
+
+// implement allocatoin and request matrices where n x m
 
 void forkChild(int processCounter) { // function to fork and execute child process
 	// convert variables to chars to pass to child processes
@@ -54,6 +61,8 @@ long long timeDiff(struct timeval start, struct timeval end) {
 	return (end.tv_sec - start.tv_sec) * 1000LL + (end.tv_usec - start.tv_usec) / 1000LL;
 }
 
+bool reqAvail(const int *, const int *, const int, const int);
+bool deadlock(const int *, const int, const int, const int *, const int *);
 
 int main(int argc, char* argv[]) {
 	printf("Main\n");
@@ -78,7 +87,7 @@ int main(int argc, char* argv[]) {
 	// processes PID array memory allocation
 	int shmPid;
 	key_t key2 = ftok("./oss.c", 0);
-	if ((shmPid = shmget(key2, n*sizeof(pid_t), IPC_CREAT | 0666)) == -1) {
+	if ((shmPid = shmget(key2, 5*sizeof(pid_t), IPC_CREAT | 0666)) == -1) {
                 perror("pid shmget");
                 exit(1);
         }
@@ -92,7 +101,7 @@ int main(int argc, char* argv[]) {
 	struct descriptor * rd;
 	int descId;
 	key2 = ftok("./user_proc.c", 0);
-	if ((descId = shmget(key2, n*sizeof(struct descriptor), IPC_CREAT | 0666)) == -1) {
+	if ((descId = shmget(key2, 5*sizeof(struct descriptor), IPC_CREAT | 0666)) == -1) {
 		perror("desc shmget");
 		exit(1);
 	}
@@ -104,10 +113,12 @@ int main(int argc, char* argv[]) {
 	
 	// loop through resource descriptor assigning values
 	int i;
+	srand(time(NULL));
 	for (i = 1; i <= 20; i++) {
 		rd[i].id = i;
-		rd[i].allocation = -1;
+		rd[i].allocation = -1; // process is currently free
 		rd[i].inventory = 20; // set total number of resources to 20
+		rd[i].instances = (rand() % 10) + 1; // number of instances between 1 and 10
 	}
 	
 	struct timeval start_time, current_time;
@@ -124,26 +135,24 @@ int main(int argc, char* argv[]) {
 		
 		gettimeofday(&current_time, NULL);
 		
+		// accept signal and if signal received, loop through processes to terminate
+		signal(SIGINT, intHandler);
+		if (signalReceived == true) {
+			printf("kill processes\n");
+			for (i = 0; i < MAX_PROC; i++) {
+				kill(pid[i], SIGTERM);
+			}
+			break;
+		}
+
 		// randomly fork if random is equal to the current ms time and n number of processes have not been executed
-		if (random == timeDiff(start_time, current_time) && processCounter != n) {
+		if (random == timeDiff(start_time, current_time) && processCounter != MAX_PROC) {
 			forkChild(processCounter);
+			
 			sleep(1); // allow time for child to execute
 			int random = (rand() % 500) + 1; // generate new number
 			processCounter = processCounter + 1; // increment process counter
-                	/*
-			// pause child
-                	printf("Pausing child %d for 5 seconds\n", pid[0]);
-                	if (kill(pid[0], SIGSTOP) == -1) {
-                        	perror("SIGSTOP");
-                        	exit(EXIT_FAILURE);
-                	}
-                	sleep(5);
-                	printf("Resuming the child process %d\n", pid[0]);
-                	if (kill(pid[0], SIGCONT) == -1) {
-                        	perror("SIGCONT");
-                        	exit(EXIT_FAILURE);
-                	}
-			*/
+        
 			gettimeofday(&start_time, NULL); // reset milliseconds timer
 		}	
         
@@ -156,5 +165,42 @@ int main(int argc, char* argv[]) {
 	shmctl(shmPid, IPC_RMID, NULL);
 	shmctl(descId, IPC_RMID, NULL);
 
+
+	printf("\noss finished\n");
 	return 0;
 }
+
+bool reqAvail(const int * req, const int * avail, const int pnum, const int num_res) {
+	int i;
+	for(i = 0; i < num_res; i++) 
+		if (req[pnum*num_res+i] > avail[i])
+			break;
+	return (i == num_res);
+}
+
+bool deadlock(const int * available, const int m, const int n, const int * request, const int * allocated) {
+	int work[m];
+	bool finish[n];
+
+	for (int i = 0; i < m; work[i] = available[i++]);
+	for (int i = 0; i < n; finish[i++] = false);
+
+	for (int p = 0; p < n; p++) {
+		if (finish[p]) 
+			continue;
+		if (reqAvail(request, work, p, m)) {
+			finish[p] = true;
+			for (int i = 1; i < m; i++)
+				work[i] += allocated[p*m+i];
+			p = -1;
+		}
+	}
+
+	int p;
+	for (p = 0; p < n; p++) 
+		if(! finish[p])
+			break;
+
+	return (p != n);
+}
+
