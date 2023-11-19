@@ -8,28 +8,21 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
-
-/*
-void signalHandler(int signal) {
-	printf("signal handler\n");
-	if (signal == SIGSTOP) {
-        printf("Child process received SIGSTOP. Pausing...\n");
-        pause();  // Wait for SIGCONT
-        printf("Child process resumed.\n");
-    	} 
-	else if (signal == SIGCONT) {
-        // Nothing to do here; just wake up from pause()
-    	}
-}
-*/
+#include <sys/msg.h>
 
 struct descriptor { // some resources may be shareable
-	int id; // resource id
-	int inventory; // total number of resources
-	int request; 
-	int allocation;
-	int release;
-	int queue; // processes waiting on the resource
+        int id; // resource id
+        int inventory; // total number of resources
+        int instances;
+	int request[5];
+        int allocation;
+        int release;
+};
+
+// message queue struct
+struct reqMsg {
+        int processNum;
+        int count;
 };
 
 long long timeDiff(struct timeval start, struct timeval end) {
@@ -68,25 +61,46 @@ int main(int argc, char* argv[]) {
 		perror("desc shmat");
 		exit(1);
 	}
+	
+	// create message queue
+        key_t key3 = ftok("./Makefile", 0);
+        int msgId = msgget(key3, IPC_CREAT | 0666);
+        if (msgId == -1) {
+                perror("msgget");
+                exit(1);
+        }
+
+	srand(time(NULL));
+	int maximumClaim = (rand() % 10) + 1;
 
 	// process should claim resource between 1 and 250 ms
 	struct timeval start_time, current_time;
+	struct reqMsg message;
 	gettimeofday(&start_time, NULL);
 	srand(time(NULL));
 	int msRandom = (rand() % 250) + 1; // generate random number between 1 and 250 milliseconds
 	usleep(msRandom * 1000);
-	bool resAcq = false; // resource acquired
+	bool resAcq = false; // resource acquired is false
 
 	//jacob: processes will sometimes get stuck in loop and not request resources 
 	do {
 		gettimeofday(&current_time, NULL);
+		printf("user proc %d sending request\n", j);
+		// Send resource request
+    		message.processNum = j; // send local process number
+		message.count = maximumClaim; // send maximum claim (request)
+		if (msgsnd(msgId, &message, sizeof(struct reqMsg) - sizeof(long), 0) == -1) {
+        		perror("msgsnd");
+        		exit(EXIT_FAILURE);
+    		}
+		/*
 		if (msRandom == timeDiff(start_time, current_time) && resAcq == false) { // take control of a random resource, simulate some work then release
 			int resRandom = (rand() % 20) + 1; // random resource between 1 and 20
 			if (rd[resRandom].allocation == -1) { // resource is free
-				
+
 				rd[resRandom].allocation = j; // set allocation for current process
 				printf("Resource %d allocated to process %d\n", rd[resRandom].id, j);
-
+				
 				usleep(msRandom * 1000); //sleep for msRandom milliseconds to similuate work (usleep accepts microseconds so have to multiply by 1000)
 
 				rd[resRandom].allocation = -1; // set alloation to -1 to free
@@ -97,8 +111,9 @@ int main(int argc, char* argv[]) {
 				printf("Process %d attempted to acquired Resource %d\n", j, resRandom);
 
 			usleep(500000); //sleep for 500 milliseconds to reduce strain on system
-		}	
-	} while (resAcq == false); 
+		}
+		*/	
+	} while (false); 
 
 	printf("child process %d finished.\n", j);
 
