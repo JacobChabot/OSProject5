@@ -9,15 +9,16 @@
 #include <sys/shm.h>
 #include <sys/ipc.h>
 #include <stdbool.h>
-
+#include <sys/msg.h>
 
 #define MAX_PROC 5
+#define MAX_RES 20
 pid_t pidArray[MAX_PROC];
 volatile bool signalReceived = false;
 
 // signal handler for CTRL C
 void intHandler(int signal) {
-	printf("Terminating children, freeing memory and exiting....\n");
+	printf("\n\nTerminating children, freeing memory and exiting....\n");
 	signalReceived = true;
 }
 
@@ -35,32 +36,26 @@ struct descriptor { // some resources may be shareable
 	int release;
 };
 
-// implement allocatoin and request matrices where n x m
+// implement allocatoin and request n x m matrices where n is number of processes
+// and m is number of resources
+struct graph {
+	int allocation[MAX_PROC][MAX_RES];
+	int request[MAX_PROC][MAX_RES];
+	int available[MAX_RES];
+}resource;
 
-void forkChild(int processCounter) { // function to fork and execute child process
-	// convert variables to chars to pass to child processes
-	char temp[10];
-	snprintf(temp, sizeof(temp), "%d", processCounter);
-	
-	pid_t pid;
-	pid = fork();
-
-	if (pid == 0) {
-                //child
-                printf("\nexecute child\n");
-                if (execl("./user_proc.out", "./user_proc.out", temp, NULL) == -1) {
-                        perror("execl");
-                        exit(1);
-                }
-                exit(1);
-        }
-}
+// message queue struct
+struct reqMsg {
+	int processNum;
+	int count;
+};
 
 // return time in milliseconds, used to fork processes at multiple intervals 
 long long timeDiff(struct timeval start, struct timeval end) {
 	return (end.tv_sec - start.tv_sec) * 1000LL + (end.tv_usec - start.tv_usec) / 1000LL;
 }
 
+void forkChild(int);
 bool reqAvail(const int *, const int *, const int, const int);
 bool deadlock(const int *, const int, const int, const int *, const int *);
 
@@ -100,14 +95,14 @@ int main(int argc, char* argv[]) {
 	// generate key and allocate shared memory for resource descriptors
 	struct descriptor * rd;
 	int descId;
-	key2 = ftok("./user_proc.c", 0);
-	if ((descId = shmget(key2, 5*sizeof(struct descriptor), IPC_CREAT | 0666)) == -1) {
-		perror("desc shmget");
+	key_t key3 = ftok("./user_proc.c", 0);
+	if ((descId = shmget(key3, 5*sizeof(struct descriptor), IPC_CREAT | 0666)) == -1) {
+		perror("oss desc shmget");
 		exit(1);
 	}
 	rd = (struct descriptor *) shmat(descId, NULL, 0);
 	if (rd == (void *)(-1)) {
-		perror("desc shmat");
+		perror("oss desc shmat");
 		exit(1);
 	}
 	
@@ -120,8 +115,17 @@ int main(int argc, char* argv[]) {
 		rd[i].inventory = 20; // set total number of resources to 20
 		rd[i].instances = (rand() % 10) + 1; // number of instances between 1 and 10
 	}
-	
+
+	// create message queue
+	key_t key4 = ftok("./Makefile", 0);
+	int msgId = msgget(key4, IPC_CREAT | 0666);
+	if (msgId == -1) {
+		perror("oss msgget");
+		exit(1);
+	}
+
 	struct timeval start_time, current_time;
+	struct reqMsg message;
 	srand(time(NULL));
 	int random = (rand() % 500) + 1; // generate random number between 1 and 500 milliseconds
 	int processCounter = 0;
@@ -134,29 +138,44 @@ int main(int argc, char* argv[]) {
         	clock->nanoseconds = timeTemp * 1e9; // keep track of time for clock
 		
 		gettimeofday(&current_time, NULL);
-		
-		// accept signal and if signal received, loop through processes to terminate
-		signal(SIGINT, intHandler);
-		if (signalReceived == true) {
-			printf("kill processes\n");
-			for (i = 0; i < MAX_PROC; i++) {
-				kill(pid[i], SIGTERM);
-			}
-			break;
-		}
 
 		// randomly fork if random is equal to the current ms time and n number of processes have not been executed
 		if (random == timeDiff(start_time, current_time) && processCounter != MAX_PROC) {
 			forkChild(processCounter);
 			
-			sleep(1); // allow time for child to execute
 			int random = (rand() % 500) + 1; // generate new number
 			processCounter = processCounter + 1; // increment process counter
         
 			gettimeofday(&start_time, NULL); // reset milliseconds timer
 		}	
         
-	} while (processCounter < 6);
+	} while (processCounter < MAX_PROC);
+	printf("oss exited do while loop\n");
+	// main loop
+	while (true) {
+		
+		// accept signal and if signal received, loop through processes to terminate
+                signal(SIGINT, intHandler);
+                if (signalReceived == true) {
+                        for (i = 0; i < MAX_PROC; i++) {
+                                kill(pid[i], SIGTERM);
+                        }
+                        shmctl(clockId, IPC_RMID, NULL);
+        		shmctl(shmPid, IPC_RMID, NULL);
+       	 		shmctl(descId, IPC_RMID, NULL);
+			break;
+                }
+
+                // look for message from processes requesting resources
+                if (msgrcv(msgId, &message, sizeof(struct reqMsg) - sizeof(long), 0, 0) == -1) {
+                        perror("msgrcv");
+                        exit(1);
+                }
+		
+		printf("Request received from process %d requesting %d instances.\n", message.processNum, message.count);
+		sleep(1);
+
+	}
 
 	wait(0); // wait for child
 
@@ -202,5 +221,23 @@ bool deadlock(const int * available, const int m, const int n, const int * reque
 			break;
 
 	return (p != n);
+}
+
+void forkChild(int processCounter) { // function to fork and execute child process
+        // convert variables to chars to pass to child processes
+        char temp[10];
+        snprintf(temp, sizeof(temp), "%d", processCounter);
+
+        pid_t pid;
+        pid = fork();
+
+        if (pid == 0) {
+                //child
+                if (execl("./user_proc.out", "./user_proc.out", temp, NULL) == -1) {
+                        perror("execl");
+                        exit(1);
+                }
+                exit(1);
+        }
 }
 
