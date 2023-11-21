@@ -1,0 +1,12 @@
+Jacob Chabot Project 5 Deadlocks
+
+This project consisted of creating user processes and having them request resources, using the deadlock detection algorithm to detect for deadlocks. Oss created data structures resource descriptors, clock, andresource allocation graph. The user processes were creating by oss, which then created their maximum claim via  random generator. The user processes then sent a resource request via a message queue and waited until they received a signal from oss. They simimulated work, then terminated. Oss was updating data structures while user processes were executing. 
+
+Issues/Bugs:
+*oss will sometimes get caught in the deadlock detection loop, I was not able to find/mitigate the cause so you will have to ^C to exit. Signal handling is present so it should terminate gracefully
+*number generators in user processes would frequently generate the same number, at first I thought it was because the same time value was being inputted into srand but I started inputting the pids and it would still generate the same number
+
+Git repo:
+https://github.com/JacobChabot/OSProject5
+
+
